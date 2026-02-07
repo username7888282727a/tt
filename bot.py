@@ -488,8 +488,14 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     
 if __name__ == "__main__":
-    print(f"\n✅ Bot başarıyla başlatıldı!\n")
-    print(f"🤖 Telegram Bot dinleniyor...\n")
+    config_manager = ConfigManager()
+    db_manager = DatabaseManager()
+    downloader = TikTokDownloader(config_manager, db_manager)
+    
+    logger = LoggerSetup.setup_logger()
+    
+    print("\n✅ Bot başarıyla başlatıldı!\n")
+    print("🤖 Telegram Bot dinleniyor...\n")
     
     try:
         bot.infinity_polling()
