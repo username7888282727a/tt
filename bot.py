@@ -160,23 +160,19 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error adding telegram user: {e}")
 
-# ============ CHROME YÖNETICISI (HEADLESS) ============
+# ============ CHROME YÖNETICISI (HEADLESS OPTIMIZED) ============
 class ChromeManager:
     @staticmethod
     def create_driver(config):
         options = uc.ChromeOptions()
-        options.page_load_strategy = 'eager'
         
-        # HEADLESS MODE
-        options.add_argument("--headless")
-        options.add_argument("--start-maximized")
+        # Choreo ve Sunucu Ortamları İçin Kritik Ayarlar
+        options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        options.add_argument("--disable-web-resources")
+        options.add_argument("--window-size=1920,1080")
         options.add_argument("--disable-extensions")
-        options.add_argument("--disable-notifications")
-        options.add_argument("--disable-popup-blocking")
         
         if config.get("use_proxy") and config.get("proxy_server"):
             options.add_argument(f"--proxy-server={config.get('proxy_server')}")
@@ -184,10 +180,11 @@ class ChromeManager:
         try:
             driver = uc.Chrome(
                 options=options,
-                use_subprocess=True
+                use_subprocess=True,
+                headless=True
             )
         except Exception as e:
-            logger.error(f"Chrome başlatma hatası: {e}")
+            logger.error(f"Chrome başlatma hatası (Binary hatası olabilir): {e}")
             raise
         
         driver.set_page_load_timeout(config.get("timeout", 25))
@@ -211,7 +208,6 @@ class TikTokDownloader:
     def download_single_video(self, driver, link, save_dir, video_id, is_photo, username):
         try:
             before_count = len(os.listdir(save_dir)) if os.path.exists(save_dir) else 0
-            
             driver.execute_cdp_cmd("Page.setDownloadBehavior", {"behavior": "allow", "downloadPath": save_dir})
 
             if is_photo:
@@ -288,12 +284,14 @@ class TikTokDownloader:
         success_count = 0
         fail_count = 0
         failed_links = []
+        drivers = [] # UnboundLocalError önlemek için liste en başta tanımlanmalı
         
         if chat_id:
             self.send_telegram_message(chat_id, f"⏳ <b>{total}</b> video indirme başlatılıyor...")
         
         try:
             max_workers = self.config_manager.get("max_workers", 1)
+            # Sürücüleri oluştur
             drivers = [ChromeManager.create_driver(self.config_manager) for _ in range(max_workers)]
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -316,12 +314,12 @@ class TikTokDownloader:
                         self.download_single_video,
                         driver, link, save_dir, video_id, is_photo, username
                     )
-                    futures[future] = (link, username, is_photo)
+                    futures[future] = (link, username)
                     
                     time.sleep(self.config_manager.get("delay_between_downloads", 3))
 
                 for future in as_completed(futures):
-                    link, username, is_photo = futures[future]
+                    link, username = futures[future]
                     try:
                         future.result()
                         success_count += 1
@@ -334,44 +332,28 @@ class TikTokDownloader:
                         self.db_manager.mark_as_downloaded(video_id, username, link, "failed")
                         logger.error(f"Failed: {link}")
         finally:
-            for driver in drivers:
+            # Sürücüleri güvenli kapat
+            for d in drivers:
                 try:
-                    driver.quit()
+                    d.quit()
                 except:
                     pass
             
             if chat_id:
-                telegram_msg = f"""
-✅ <b>İndirme Tamamlandı!</b>
-
-📊 <b>Sonuçlar:</b>
-✅ Başarılı: <b>{success_count}</b>
-❌ Hatalı: <b>{fail_count}</b>
-                """
+                telegram_msg = f"✅ <b>İndirme Tamamlandı!</b>\n\n📊 <b>Sonuçlar:</b>\n✅ Başarılı: <b>{success_count}</b>\n❌ Hatalı: <b>{fail_count}</b>"
                 self.send_telegram_message(chat_id, telegram_msg)
             
             return success_count, fail_count, failed_links
 
-# ============ TELEGRAM BOT KOMANDLARı ============
+# ============ TELEGRAM HANDLERS ============
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     chat_id = message.chat.id
     username = message.from_user.username or message.from_user.first_name or "User"
     db_manager.add_telegram_user(chat_id, username)
     
-    response = """
-🎬 <b>TikTok Pro Downloader Bot</b>
-
-Hoşgeldin! 👋
-
-📌 <b>Komutlar:</b>
-/download - Video/Foto indirmek için
-/scrape - Kullanıcıdan videoları çekmek için
-/stats - İstatistikleri görmek için
-/help - Yardım almak için
-    """
+    response = "🎬 <b>TikTok Pro Downloader Bot</b>\n\nHoşgeldin! 👋\n\n📌 <b>Komutlar:</b>\n/download - Video/Foto indirmek için\n/scrape - Kullanıcıdan videoları çekmek için\n/stats - İstatistikleri görmek için\n/help - Yardım almak için"
     bot.send_message(chat_id, response, parse_mode='HTML')
-    logger.info(f"New telegram user: {username} ({chat_id})")
 
 @bot.message_handler(commands=['download'])
 def handle_download(message):
@@ -389,116 +371,42 @@ def handle_scrape(message):
 def handle_stats(message):
     chat_id = message.chat.id
     success, failed = db_manager.get_download_stats()
-    stats_text = f"""
-📊 <b>İstatistikler:</b>
-
-✅ Başarılı İndirmeler: <b>{success}</b>
-❌ Hatalı İndirmeler: <b>{failed}</b>
-📈 Toplam: <b>{success + failed}</b>
-    """
+    stats_text = f"📊 <b>İstatistikler:</b>\n\n✅ Başarılı İndirmeler: <b>{success}</b>\n❌ Hatalı İndirmeler: <b>{failed}</b>\n📈 Toplam: <b>{success + failed}</b>"
     bot.send_message(chat_id, stats_text, parse_mode='HTML')
 
-@bot.message_handler(commands=['help'])
-def handle_help(message):
-    chat_id = message.chat.id
-    help_text = """
-💡 <b>Yardım Rehberi</b>
-
-<b>1️⃣ Tek Video İndirmek:</b>
-/download yazıp linki gönder
-
-<b>2️⃣ Kullanıcıdan Tüm Videoları Çekmek:</b>
-/scrape yazıp kullanıcı adını gönder
-
-<b>3️⃣ İstatistikleri Görmek:</b>
-/stats yazarak toplam indirmeleri gör
-    """
-    bot.send_message(chat_id, help_text, parse_mode='HTML')
-
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    chat_id = message.chat.id
-    if "tiktok.com" in message.text.lower():
-        msg = bot.send_message(chat_id, "⏳ <b>İndirme işlemi başlatılıyor...</b>", parse_mode='HTML')
-        process_download_link(message, chat_id)
-    else:
-        bot.send_message(chat_id, "❌ <b>Geçersiz komut!</b>\n\n/help yazarak yardım alabilirsiniz.", parse_mode='HTML')
+@bot.message_handler(func=lambda message: "tiktok.com" in message.text.lower())
+def handle_tiktok_link(message):
+    process_download_link(message, message.chat.id)
 
 def process_download_link(message, chat_id):
     link = message.text.strip()
-    
     if "tiktok.com" not in link:
         bot.send_message(chat_id, "❌ <b>Geçerli bir TikTok linki gönder!</b>", parse_mode='HTML')
         return
     
-    try:
-        threading.Thread(
-            target=downloader.download_videos,
-            args=([link], chat_id),
-            daemon=True
-        ).start()
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ <b>Hata:</b> {str(e)}", parse_mode='HTML')
-        logger.error(f"Download error: {e}")
+    threading.Thread(target=downloader.download_videos, args=([link], chat_id), daemon=True).start()
 
 def process_scrape_user(message, chat_id):
     username = message.text.strip()
+    if not username: return
     
-    if not username:
-        bot.send_message(chat_id, "❌ <b>Kullanıcı adı girin!</b>", parse_mode='HTML')
-        return
-    
-    try:
-        bot.send_message(chat_id, f"⏳ <b>{username} adlı kullanıcıdan videolar çekiliyor...</b>", parse_mode='HTML')
-        
+    def run_scrape():
+        bot.send_message(chat_id, f"⏳ <b>{username}</b> videoları toplanıyor...", parse_mode='HTML')
         links = downloader.scrape_user(username)
-        
-        if not links:
-            bot.send_message(chat_id, f"❌ <b>{username} kullanıcısından video bulunamadı!</b>", parse_mode='HTML')
-            return
-        
-        bot.send_message(chat_id, f"✅ <b>{len(links)} video bulundu!</b>\n\n⏳ <b>İndirme başlatılıyor...</b>", parse_mode='HTML')
-        
-        threading.Thread(
-            target=downloader.download_videos,
-            args=(links, chat_id),
-            daemon=True
-        ).start()
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ <b>Hata:</b> {str(e)}", parse_mode='HTML')
-        logger.error(f"Scrape error: {e}")
+        if links:
+            bot.send_message(chat_id, f"✅ <b>{len(links)}</b> video bulundu, indirme başlıyor...", parse_mode='HTML')
+            downloader.download_videos(links, chat_id)
+        else:
+            bot.send_message(chat_id, "❌ Video bulunamadı.", parse_mode='HTML')
+            
+    threading.Thread(target=run_scrape, daemon=True).start()
 
-# ============ ANA PROGRAM ============
+# ============ START ============
 if __name__ == "__main__":
-    print("""
-    ╔════════════════════════════════════════════════════════════╗
-    ║    TikTok Pro Downloader - Telegram Bot Edition v11.0     ║
-    ║          🚀 Choreo Deployment Version 🚀                 ║
-    ╚════════════════════════════════════════════════════════════╝
-    """)
-    
+    logger = LoggerSetup.setup_logger()
     config_manager = ConfigManager()
     db_manager = DatabaseManager()
     downloader = TikTokDownloader(config_manager, db_manager)
     
-    logger = LoggerSetup.setup_logger()
-    
-    logger.info("=" * 60)
-    logger.info("TikTok Pro Downloader Bot başlatılıyor...")
-    logger.info("=" * 60)
-    
-if __name__ == "__main__":
-    config_manager = ConfigManager()
-    db_manager = DatabaseManager()
-    downloader = TikTokDownloader(config_manager, db_manager)
-    
-    logger = LoggerSetup.setup_logger()
-    
-    print("\n✅ Bot başarıyla başlatıldı!\n")
-    print("🤖 Telegram Bot dinleniyor...\n")
-    
-    try:
-        bot.infinity_polling()
-    except Exception as e:
-        logger.error(f"Bot hatası: {e}")
-        print(f"\n❌ Bot hatası: {e}")
+    print("\n✅ Bot Choreo üzerinde başlatıldı!\n")
+    bot.infinity_polling()
