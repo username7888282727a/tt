@@ -16,8 +16,10 @@ from selenium.webdriver.common.keys import Keys
 from telebot import TeleBot
 
 # ============ BOT TOKEN ============
-# Choreo Secrets'ten gelecek
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set!")
+
 bot = TeleBot(TELEGRAM_BOT_TOKEN)
 
 # ============ LOGGING AYARLARI ============
