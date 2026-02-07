@@ -485,6 +485,7 @@ if __name__ == "__main__":
     logger.info("TikTok Pro Downloader Bot başlatılıyor...")
     logger.info("=" * 60)
     
+if __name__ == "__main__":
     print(f"\n✅ Bot başarıyla başlatıldı!\n")
     print(f"🤖 Telegram Bot dinleniyor...\n")
     
